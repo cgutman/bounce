@@ -51,12 +51,26 @@ client_thread(LPVOID Parameter)
 	PCLIENT_CONTEXT context = (PCLIENT_CONTEXT) Parameter;
 	int err;
 	FD_SET fds;
+#define SRC_CLOSED 0x01
+#define DST_CLOSED 0x02
+	char readClosed;
 
+	readClosed = 0;
 	for (;;)
 	{
 		FD_ZERO(&fds);
-		FD_SET(context->src, &fds);
-		FD_SET(context->dst, &fds);
+
+		if (!(readClosed & SRC_CLOSED))
+			FD_SET(context->src, &fds);
+
+		if (!(readClosed & DST_CLOSED))
+			FD_SET(context->dst, &fds);
+
+		if (readClosed == (SRC_CLOSED | DST_CLOSED))
+		{
+			printf("Graceful disconnect from peer\n");
+			goto Cleanup;
+		}
 
 		err = select(2, &fds, NULL, NULL, NULL);
 		if (err == SOCKET_ERROR)
@@ -71,9 +85,9 @@ client_thread(LPVOID Parameter)
 
 			if (err == 0)
 			{
-				/* Connection gracefully closed */
-				shutdown(context->src, SD_SEND);
-				goto Cleanup;
+				/* Src is done sending, so notify dst of this */
+				shutdown(context->dst, SD_SEND);
+				readClosed |= SRC_CLOSED;
 			}
 			else if (err == -1 || err == -2)
 			{
@@ -88,9 +102,9 @@ client_thread(LPVOID Parameter)
 
 			if (err == 0)
 			{
-				/* Connection gracefully closed */
-				shutdown(context->dst, SD_SEND);
-				goto Cleanup;
+				/* Dst is done sending, so notify src of this */
+				shutdown(context->src, SD_SEND);
+				readClosed |= DST_CLOSED;
 			}
 			else if (err == -1 || err == -2)
 			{
